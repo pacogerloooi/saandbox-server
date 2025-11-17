@@ -3,8 +3,7 @@ import { Server as IOServer, Socket } from "socket.io";
 import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
-import fs from "fs";
-import path from "path";
+
 
 dotenv.config();
 
@@ -67,105 +66,30 @@ interface StopTypingPayload {
   user_id: string;
 }
 
-const __dirname = path.resolve();
-
-
 const PORT = Number(process.env.PORT || 3000);
-
-let dynamicConfig = {
-  apiBaseUrl: process.env.API_BASE_URL || "http://localhost:8000",
-  apiKey: process.env.API_KEY || "",
-};
+const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8000";
+const API_KEY = process.env.API_KEY || "";
 
 const roomKeyToId = new Map<string, number | string>();
 
-const httpServer = http.createServer((req, res) => {
-  // Serve config panel HTML
-  if (req.method === "GET" && req.url === "/config") {
-    const htmlPath = path.join(__dirname, "public", "config.html");
-    fs.readFile(htmlPath, (err, data) => {
-      if (err) {
-        res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Error loading config panel");
-        return;
-      }
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(data);
-    });
-    return;
-  }
-
-  // Get current config
-  if (req.method === "GET" && req.url === "/api/config") {
-    res.writeHead(200, { 
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
-    });
-    res.end(JSON.stringify(dynamicConfig));
-    return;
-  }
-
-  // Update config
-  if (req.method === "POST" && req.url === "/api/config") {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      try {
-        const newConfig = JSON.parse(body);
-        if (newConfig.apiBaseUrl) dynamicConfig.apiBaseUrl = newConfig.apiBaseUrl;
-        if (newConfig.apiKey !== undefined) dynamicConfig.apiKey = newConfig.apiKey;
-        
-        console.log("✅ Configuración actualizada:", dynamicConfig);
-        
-        res.writeHead(200, { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.end(JSON.stringify({ success: true, config: dynamicConfig }));
-      } catch (err) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: false, error: "Invalid JSON" }));
-      }
-    });
-    return;
-  }
-
-  // CORS preflight
-  if (req.method === "OPTIONS") {
-    res.writeHead(200, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    });
-    res.end();
-    return;
-  }
-
-  // Default response
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Socket.IO Server - Visit /config to configure");
-});
-
+const httpServer = http.createServer();
 const io = new IOServer(httpServer, {
   connectionStateRecovery: {},
   cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
-/* ======= Helpers ======= */
 
 function apiHeaders() {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (dynamicConfig.apiKey) headers["Authorization"] = `Bearer ${dynamicConfig.apiKey}`;
+  if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`;
   return headers;
 }
 
 async function createRoomOnApi(payload: CreateRoomPayload): Promise<ApiRoom> {
   try {
-    const resp = await axios.post<ApiRoom>(`${dynamicConfig.apiBaseUrl}/rooms`, payload, {
+    const resp = await axios.post<ApiRoom>(`${API_BASE_URL}/rooms`, payload, {
       headers: apiHeaders(),
     });
     return resp.data;
@@ -181,7 +105,7 @@ async function createRoomOnApi(payload: CreateRoomPayload): Promise<ApiRoom> {
 
 function saveMessageAsync(roomId: number | string, message: Message) {
   axios
-    .post(`${dynamicConfig.apiBaseUrl}/rooms/${roomId}/messages`, message, {
+    .post(`${API_BASE_URL}/rooms/${roomId}/messages`, message, {
       headers: apiHeaders(),
     })
     .catch((err) => {
@@ -195,7 +119,7 @@ function saveMessageAsync(roomId: number | string, message: Message) {
 
 async function createAction(payload: CheckoutInitiatedPayload){
   try {
-    await axios.post(`${dynamicConfig.apiBaseUrl}/actions`, payload, {
+    await axios.post(`${API_BASE_URL}/actions`, payload, {
       headers: apiHeaders(),
     });
   } catch (err) {
@@ -309,7 +233,6 @@ io.on("connection", (socket: Socket) => {
     socket.join(String(resolvedRoomId));
     socket.emit("joined_room", { room_id: resolvedRoomId });
   });
-  
   socket.on("checkout_initiated", (payload: CheckoutInitiatedPayload) => {
     try {
       createAction(payload);
@@ -338,17 +261,17 @@ io.on("connection", (socket: Socket) => {
     io.emit("order_paid", payload);
   });
 
+
+
   socket.on("disconnect", () => {
     console.log(`⚠️ Cliente desconectado: ${socket.id}`);
   });
 });
-
 setInterval(() => {
   io.emit("heartbeat", { time: Date.now() });
 }, 20000);
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Socket.IO escuchando en ${PORT}`);
-  console.log(`🌐 API_BASE_URL=${dynamicConfig.apiBaseUrl}`);
-  console.log(`⚙️  Panel de configuración: http://localhost:${PORT}/config`);
+  console.log(`🌐 API_BASE_URL=${API_BASE_URL}`);
 });
