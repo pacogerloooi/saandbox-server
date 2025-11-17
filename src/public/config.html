@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel de Configuración - Socket.IO Server</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      max-width: 600px;
+      width: 100%;
+      padding: 40px;
+    }
+
+    h1 {
+      color: #2d3748;
+      font-size: 28px;
+      margin-bottom: 8px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      color: #718096;
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+
+    .form-group {
+      margin-bottom: 24px;
+    }
+
+    label {
+      display: block;
+      color: #2d3748;
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.2s;
+      font-family: 'Courier New', monospace;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .hint {
+      color: #718096;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    .status {
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      display: none;
+    }
+
+    .status.success {
+      background: #c6f6d5;
+      color: #22543d;
+      border: 1px solid #9ae6b4;
+      display: block;
+    }
+
+    .status.error {
+      background: #fed7d7;
+      color: #742a2a;
+      border: 1px solid #fc8181;
+      display: block;
+    }
+
+    .current-config {
+      background: #f7fafc;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .current-config h3 {
+      color: #2d3748;
+      font-size: 16px;
+      margin-bottom: 12px;
+    }
+
+    .config-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .config-item:last-child {
+      border-bottom: none;
+    }
+
+    .config-label {
+      color: #718096;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .config-value {
+      color: #2d3748;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+      word-break: break-all;
+      text-align: right;
+      max-width: 60%;
+    }
+
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>⚙️ Panel de Configuración</h1>
+    <p class="subtitle">Configura dinámicamente tu servidor Socket.IO sin redesplegar</p>
+
+    <div class="current-config" id="currentConfig">
+      <h3>📊 Configuración Actual</h3>
+      <div class="config-item">
+        <span class="config-label">API Base URL:</span>
+        <span class="config-value" id="currentApiUrl">Cargando...</span>
+      </div>
+      <div class="config-item">
+        <span class="config-label">API Key:</span>
+        <span class="config-value" id="currentApiKey">Cargando...</span>
+      </div>
+    </div>
+
+    <form id="configForm">
+      <div class="form-group">
+        <label for="apiBaseUrl">🌐 API Base URL</label>
+        <input 
+          type="text" 
+          id="apiBaseUrl" 
+          name="apiBaseUrl" 
+          placeholder="http://localhost:8000"
+          required
+        >
+        <p class="hint">URL base de tu API backend</p>
+      </div>
+
+      <div class="form-group">
+        <label for="apiKey">🔑 API Key</label>
+        <input 
+          type="text" 
+          id="apiKey" 
+          name="apiKey" 
+          placeholder="tu-api-key-aqui"
+        >
+        <p class="hint">Key de autenticación (opcional)</p>
+      </div>
+
+      <button type="submit">💾 Guardar Configuración</button>
+    </form>
+
+    <div class="status" id="status"></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('configForm');
+    const status = document.getElementById('status');
+    const apiBaseUrlInput = document.getElementById('apiBaseUrl');
+    const apiKeyInput = document.getElementById('apiKey');
+    const currentApiUrl = document.getElementById('currentApiUrl');
+    const currentApiKey = document.getElementById('currentApiKey');
+
+    // Load current config on page load
+    async function loadCurrentConfig() {
+      try {
+        const response = await fetch('/api/config');
+        const config = await response.json();
+        
+        currentApiUrl.textContent = config.apiBaseUrl || 'No configurado';
+        currentApiKey.textContent = config.apiKey ? '••••••••' : 'No configurado';
+        
+        apiBaseUrlInput.value = config.apiBaseUrl || '';
+        apiKeyInput.value = config.apiKey || '';
+      } catch (error) {
+        console.error('Error loading config:', error);
+      }
+    }
+
+    loadCurrentConfig();
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const formData = new FormData(form);
+      const config = {
+        apiBaseUrl: formData.get('apiBaseUrl'),
+        apiKey: formData.get('apiKey'),
+      };
+
+      // Show loading state
+      form.classList.add('loading');
+      status.className = 'status';
+      status.style.display = 'none';
+
+      try {
+        const response = await fetch('/api/config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(config),
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          status.className = 'status success';
+          status.textContent = '✅ Configuración actualizada exitosamente. Los cambios se aplicarán inmediatamente.';
+          
+          // Update current config display
+          currentApiUrl.textContent = config.apiBaseUrl || 'No configurado';
+          currentApiKey.textContent = config.apiKey ? '••••••••' : 'No configurado';
+        } else {
+          throw new Error(result.error || 'Error desconocido');
+        }
+      } catch (error) {
+        status.className = 'status error';
+        status.textContent = `❌ Error al actualizar: ${error.message}`;
+      } finally {
+        form.classList.remove('loading');
+      }
+    });
+  </script>
+</body>
+</html>
