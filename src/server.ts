@@ -282,7 +282,7 @@ io.on("connection", (socket: Socket) => {
 setInterval(() => {
   io.emit("heartbeat", { time: Date.now() })
   console.log("💓 Heartbeat emitted:", new Date().toISOString())
-}, 60000)
+}, 40000)
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Socket.IO server running on port ${PORT}`)
@@ -301,3 +301,4 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection at:", promise, "reason:", reason)
   process.exit(1)
 })
+
