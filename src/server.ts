@@ -133,17 +133,24 @@ function resolveRoomId(room_id?: number | string, room_key?: string) {
 io.on("connection", (socket: Socket) => {
   console.log(`⚡ Cliente conectado: ${socket.id}`)
 
-  socket.on("create_or_send", async (payload: CreateOrSendPayload) => {
-    const { name, content, sender, email,  } = payload
+  socket.on("create_or_send", async (payload: CreateOrSendPayload & { user_id?: string }) => {
+    const { name, content, sender, email, user_id } = payload
     const room_key = `room_${uuidv4().split("-")[0]}`
 
-    const createPayload: CreateRoomPayload = {
+    let createPayload: any = {
       room_key,
-      email,
-      name,
       content,
       sender,
       status: "open",
+    }
+
+    // Si se proporciona user_id, solo enviamos ese campo (omitimos email y name)
+    if (user_id) {
+      createPayload.user_id = user_id
+      createPayload.session_key = null // Puede ser nulo en este caso
+    } else {
+      createPayload.email = email
+      createPayload.name = name
     }
 
     try {
