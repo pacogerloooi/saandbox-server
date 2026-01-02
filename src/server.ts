@@ -1,290 +1,262 @@
-import { createServer } from "http"
-import { Server as IOServer, type Socket } from "socket.io"
-import axios from "axios"
-import { v4 as uuidv4 } from "uuid"
-import dotenv from "dotenv"
+import { createServer } from 'http'
+import { Server as IOServer, type Socket } from 'socket.io'
+import axios from 'axios'
+import dotenv from 'dotenv'
+
 dotenv.config()
 
-interface ApiRoom {
-  id: number | string
-  session_key: string
+const PORT = Number(process.env.PORT || 3004)
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
+const API_KEY = process.env.API_KEY || ''
+
+interface LogEntry {
+  timestamp: string
+  level: 'info' | 'error' | 'warn'
+  message: string
+  data?: any
+}
+
+const logBuffer: LogEntry[] = []
+const MAX_LOGS = 1000 // Mantener últimos 1000 logs
+
+function addLog (level: LogEntry['level'], message: string, data?: any) {
+  const entry: LogEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    data
+  }
+
+  logBuffer.push(entry)
+
+  // Mantener buffer circular
+  if (logBuffer.length > MAX_LOGS) {
+    logBuffer.shift()
+  }
+
+  // También imprimir en consola real
+  const logMessage = `[${entry.timestamp}] [${level.toUpperCase()}] ${message}`
+  if (level === 'error') {
+    console.error(logMessage, data || '')
+  } else if (level === 'warn') {
+    console.warn(logMessage, data || '')
+  } else {
+    console.log(logMessage, data || '')
+  }
+}
+
+const httpServer = createServer((req, res) => {
+  if (req.url === '/logs' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify(
+        {
+          total: logBuffer.length,
+          logs: logBuffer
+        },
+        null,
+        2
+      )
+    )
+    return
+  }
+
+  if (req.url === '/logs/console' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' })
+    const consoleOutput = logBuffer
+      .map(log => {
+        const dataStr = log.data ? ` | ${JSON.stringify(log.data)}` : ''
+        return `[${log.timestamp}] [${log.level.toUpperCase()}] ${
+          log.message
+        }${dataStr}`
+      })
+      .join('\n')
+    res.end(consoleOutput)
+    return
+  }
+
+  if (req.url === '/logs/clear' && req.method === 'POST') {
+    const count = logBuffer.length
+    logBuffer.length = 0
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ message: 'Logs cleared', cleared: count }))
+    return
+  }
+
+  if (req.url === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ status: 'ok', timestamp: Date.now() }))
+    return
+  }
+
+  res.writeHead(404, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({ error: 'Not found' }))
+})
+
+const io = new IOServer(httpServer, {
+  connectionStateRecovery: {},
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+})
+
+type Sender = 'user' | 'agent'
+
+interface Room {
+  id: number
   agent_name: string
   user_name: string
-  status: string
-  created_at: string
+  status: 'open' | 'closed'
 }
-
-interface CreateRoomPayload {
-  room_key: string
-  name: string
-  email?: string
-  status: "open"
-  content: string
-  sender: "user" | "agent"
-}
-
-interface Message {
-  sender: "user" | "agent"
-  content: string
-}
-
-interface CreateOrSendPayload {
-    room_key?: string
-  name: string
-  email?: string
-  content: string
-  sender: "user" | "agent"
-}
-
-interface SendMessagePayload {
-  room_id?: number | string
-  room_key?: string
-  content: string
-  sender?: "user" | "agent"
-}
-
-interface JoinRoomPayload {
-  room_id?: number | string
-  room_key?: string
-}
-
 interface ActionPayload {
   action: string
   description?: string
   [key: string]: any
 }
 
-interface TypingPayload {
-  room_id?: number | string
-  room_key?: string
-  user_id: string
-  user_name: string
+interface Message {
+  content: string
+  sender: Sender
+  timestamp?: string
 }
 
-interface StopTypingPayload {
-  room_id?: number | string
-  room_key?: string
-  user_id: string
-}
-
-const PORT = Number(process.env.PORT || 3000)
-const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8000"
-const API_KEY = process.env.API_KEY || ""
-
-const roomKeyToId = new Map<string, number | string>()
-
-const httpServer = createServer((req, res) => {
-
-  if (req.url === "/health" && req.method === "GET") {
-    res.writeHead(200, { "Content-Type": "application/json" })
-    res.end(JSON.stringify({ status: "ok", timestamp: Date.now() }))
-    return
-  }
-
-  res.writeHead(404, { "Content-Type": "application/json" })
-  res.end(JSON.stringify({ error: "Not found" }))
-})
-
-
-const io = new IOServer(httpServer, {
-  connectionStateRecovery: {},
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
-})
-
-function apiHeaders() {
+function apiHeaders () {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    'Content-Type': 'application/json'
   }
-  if (API_KEY) headers["Authorization"] = `Bearer ${API_KEY}`
+
+  if (API_KEY) {
+    headers['Authorization'] = `Bearer ${API_KEY}`
+  }
+
   return headers
 }
 
-async function createRoomOnApi(payload: CreateRoomPayload): Promise<ApiRoom> {
-  try {
-    const resp = await axios.post<{ room: ApiRoom }>(`${API_BASE_URL}/rooms`, payload, {
-      headers: apiHeaders(),
-    })
-    return resp.data.room
-  } catch (err) {
-    const e = err as any
-    console.error("❌ Error creando sala:", e?.response?.data || e?.message || e)
-    throw e
-  }
-}
-
-function saveMessageAsync(roomId: number | string, message: Message) {
+function saveMessageAsync (roomId: number, message: Message) {
   axios
     .post(`${API_BASE_URL}/room/messages/${roomId}`, message, {
-      headers: apiHeaders(),
+      headers: apiHeaders()
     })
-    .catch((err) => {
-      const e = err as any
-      console.error(`❌ Error guardando mensaje en room ${roomId}:`, e?.response?.data || e?.message || e)
+    .catch(err => {
+      addLog(
+        'error',
+        `Error guardando mensaje en room ${roomId}`,
+        err?.response?.data || err?.message
+      )
     })
 }
 
-function resolveRoomId(room_id?: number | string, room_key?: string) {
-  return room_id || (room_key ? roomKeyToId.get(room_key) : undefined)
-}
+io.on('connection', (socket: Socket) => {
+  addLog('info', `Cliente conectado: ${socket.id}`)
 
-io.on("connection", (socket: Socket) => {
-  console.log(`⚡ Cliente conectado: ${socket.id}`)
+  socket.on('room:join', ({ room }: { room: Room }) => {
+    const roomName = `room:${room.id}`
 
-  socket.on("create_or_send", async (payload: CreateOrSendPayload & { user_id?: string }) => {
-    const { name, content, sender, email, user_id } = payload
-    const room_key = `room_${uuidv4().split("-")[0]}`
+    socket.join(roomName)
 
-    let createPayload: any = {
-      room_key,
+    socket.emit('room:joined', { room })
+
+    addLog('info', `Socket ${socket.id} unido a ${roomName}`)
+  })
+
+  socket.on(
+    'room:message',
+    ({
+      roomId,
       content,
       sender,
-      status: "open",
-    }
-
-    // Si se proporciona user_id, solo enviamos ese campo (omitimos email y name)
-    if (user_id) {
-      createPayload.user_id = user_id
-      createPayload.session_key = null // Puede ser nulo en este caso
-    } else {
-      createPayload.email = email
-      createPayload.name = name
-    }
-
-    try {
-      const apiRoom = await createRoomOnApi(createPayload)
-      const roomId = apiRoom.id
-
-      roomKeyToId.set(room_key, roomId)
-      socket.join(String(roomId))
-
-      socket.emit("room_created", {
-        room_id: roomId,
-        room_key,
-        user_name: apiRoom.user_name,
-        agent_name: apiRoom.agent_name,
-        session_key: apiRoom.session_key,
-        status: apiRoom.status,
-        created_at: apiRoom.created_at,
+      timestamp
+    }: {
+      roomId: number
+      content: string
+      sender: Sender
+      timestamp?: string
+    }) => {
+      const roomName = `room:${roomId}`
+      const now = new Date()
+      const timeString = now.toLocaleTimeString('es-ES', {
+        hour: '2-digit',
+        minute: '2-digit'
       })
 
-      console.log(`✅ Sala creada: ${roomId} (${room_key})`)
-    } catch {
-      socket.emit("error_creating_room", {
-        message: "No se pudo crear la sala",
-      })
+      const message: Message = {
+        content,
+        sender,
+        timestamp: timeString
+      }
+
+      socket.to(roomName).emit('room:message', message)
+
+      saveMessageAsync(roomId, message)
     }
-  })
+  )
 
-  socket.on("send_message", (payload: SendMessagePayload) => {
-    const { room_id, room_key, content, sender = "user" } = payload
-
-    const resolvedRoomId = resolveRoomId(room_id, room_key)
-    if (!resolvedRoomId) {
-      socket.emit("error", { message: "room_id o room_key requerido" })
-      return
+  socket.on(
+    'room:typing:start',
+    ({ roomId, sender }: { roomId: number; sender: Sender }) => {
+      socket.to(`room:${roomId}`).emit('room:typing:start', { sender })
     }
+  )
 
-    const msg: Message = { sender, content }
-
-    io.to(String(resolvedRoomId)).emit("new_message", msg)
-    saveMessageAsync(resolvedRoomId, msg)
-  })
-
-  socket.on("join_room", (payload: JoinRoomPayload) => {
-    const resolvedRoomId = resolveRoomId(payload.room_id, payload.room_key)
-
-    if (!resolvedRoomId) {
-      socket.emit("error", {
-        message: "room_id o room_key requerido para unirse",
-      })
-      return
+  socket.on(
+    'room:typing:stop',
+    ({ roomId, sender }: { roomId: number; sender: Sender }) => {
+      socket.to(`room:${roomId}`).emit('room:typing:stop', { sender })
     }
-
-    socket.join(String(resolvedRoomId))
-    socket.emit("joined_room", { room_id: resolvedRoomId })
-    console.log(`✅ Cliente ${socket.id} unido a sala ${resolvedRoomId}`)
-  })
-
-  socket.on("user_typing", (payload: TypingPayload) => {
-    const resolvedRoomId = resolveRoomId(payload.room_id, payload.room_key)
-    if (!resolvedRoomId) return
-
-    socket.to(String(resolvedRoomId)).emit("user_typing", {
-      user_id: payload.user_id,
-      user_name: payload.user_name,
-      room_id: resolvedRoomId,
-    })
-  })
-
-  socket.on("user_stop_typing", (payload: StopTypingPayload) => {
-    const resolvedRoomId = resolveRoomId(payload.room_id, payload.room_key)
-    if (!resolvedRoomId) return
-
-    socket.to(String(resolvedRoomId)).emit("user_stop_typing", {
-      user_id: payload.user_id,
-      room_id: resolvedRoomId,
-      timestamp: new Date().toISOString(),
-    })
-  })
+  )
 
   const actionEvents = [
-    "checkout_initiated",
-    "checkout_completed",
-    "user_viewing_product",
-    "user_left_product",
-    "order_paid",
+    'checkout_initiated',
+    'checkout_completed',
+    'user_viewing_product',
+    'user_left_product',
+    'order_paid'
   ]
 
-  actionEvents.forEach((eventName) => {
+  actionEvents.forEach(eventName => {
     socket.on(eventName, (payload: ActionPayload) => {
-      const { room_id, room_key, ...eventData } = payload
-      const resolvedRoomId = resolveRoomId(room_id, room_key)
-
-      if (resolvedRoomId) {
-        io.to(String(resolvedRoomId)).emit(eventName, eventData)
-        console.log(`📢 Evento ${eventName} emitido a sala ${resolvedRoomId}`)
+      const { room_id, ...eventData } = payload
+      if (room_id) {
+        io.to(String(room_id)).emit(eventName, eventData)
+        addLog('info', `Evento ${eventName} emitido a sala ${room_id}`)
       } else {
         io.emit(eventName, payload)
-        console.log(`📢 Evento ${eventName} emitido globalmente`)
+        addLog('info', `Evento ${eventName} emitido globalmente`)
       }
     })
   })
 
-  socket.on("disconnect", () => {
-    console.log(`⚠️ Cliente desconectado: ${socket.id}`)
+  socket.on('disconnect', () => {
+    addLog('warn', `Cliente desconectado: ${socket.id}`)
   })
 })
 
 setInterval(() => {
-  io.emit("heartbeat", { time: Date.now() })
-  console.log("💓 Heartbeat emitido:", new Date().toISOString())
+  io.emit('heartbeat', { time: Date.now() })
+  addLog('info', `Heartbeat emitido: ${new Date().toISOString()}`)
 }, 40000)
 
-async function startServer() {
-
+async function startServer () {
   httpServer.listen(PORT, () => {
-    console.log(`🚀 Socket.IO server corriendo en puerto ${PORT}`)
-    console.log(`📡 WebSocket endpoint: ws://localhost:${PORT}`)
-    console.log(`🏥 Health check: http://localhost:${PORT}/health`)
-    console.log(`🌍 Entorno: ${process.env.NODE_ENV || "development"}`)
-    console.log(`🔗 API Base URL: ${API_BASE_URL}`)
+    addLog('info', `Socket.IO server corriendo en puerto ${PORT}`)
+    addLog('info', `WebSocket endpoint: ws://localhost:${PORT}`)
+    addLog('info', `Health check: http://localhost:${PORT}/health`)
+    addLog('info', `Logs JSON: http://localhost:${PORT}/logs`)
+    addLog('info', `Logs Console: http://localhost:${PORT}/logs/console`)
+    addLog('info', `Entorno: ${process.env.NODE_ENV || 'development'}`)
+    addLog('info', `API Base URL: ${API_BASE_URL}`)
   })
 }
 
 startServer()
 
-process.on("uncaughtException", (error) => {
-  console.error("Uncaught Exception:", error)
+process.on('uncaughtException', error => {
+  addLog('error', 'Uncaught Exception', error)
   process.exit(1)
 })
 
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason)
+process.on('unhandledRejection', (reason, promise) => {
+  addLog('error', 'Unhandled Rejection', { reason, promise })
   process.exit(1)
 })
-
-
-
